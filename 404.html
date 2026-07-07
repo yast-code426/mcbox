@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+<script>
+// GitHub Pages 子目录路径自适应
+(function(){
+  var host = location.hostname;
+  var path = location.pathname;
+  if (host.endsWith('.github.io')) {
+    var seg = path.split('/').filter(Boolean)[0];
+    if (seg) document.write('<base href="/' + seg + '/">');
+  } else {
+    document.write('<base href="/">');
+  }
+})();
+</script>
+<script>
+// 默认设置中文语言
+try { if (!localStorage.getItem('Language')) localStorage.setItem('Language', 'zh-CN'); } catch(e) {}
+</script>
+<link rel="preconnect" href="https://session.coolmathblox.ca" crossorigin>
+<link rel="dns-prefetch" href="https://session.coolmathblox.ca">
+
+    <title>Miniblox - 免费体素沙盒游戏 | Victor Wei, qhyun, Yast</title>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, user-scalable=no, maximum-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
+    <meta name="description" content="Play free with friends — no download, no sign-up, just click and play. A world of games like Minecraft, from Skywars to Survival." />
+    <meta name="theme-color" content="#6045a0" />
+    <meta name="author" content="Victor Wei, qhyun, Yast" />
+    <link rel="canonical" href="https://miniblox.io/" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta property="og:site_name" content="Miniblox" />
+    <meta property="og:title" content="Miniblox – Free Survival, Creative, Skywars &amp; More" />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://miniblox.io/" />
+    <meta property="og:image" content="https://miniblox.io/images/titlescreen/default.png" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="manifest" href="./manifest.json" />
+    <meta http-equiv="Cache-control" content="no-cache, no-store, must-revalidate" />
+    <meta http-equiv="expires" content="0" />
+    <meta http-equiv="Pragma" content="no-cache" />
+    <link rel="icon" type="image/png" href="./favicon.png" />
+
+    <!-- Yast 加载器: 下载解压 bundle.bin → 加载游戏 -->
+    <script src="./loader.js"></script>
+
+    <style>
+      /* 加载界面 */
+      #yast-loading {
+        position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+        background: #1a1a2e; z-index: 9999;
+        display: flex; flex-direction: column;
+        align-items: center; justify-content: center;
+        font-family: 'Segoe UI', system-ui, sans-serif;
+      }
+      .yast-logo {
+        font-size: 36px; font-weight: 800; color: #7c5cff;
+        margin-bottom: 30px; letter-spacing: 2px;
+      }
+      .yast-progress-bar {
+        width: 300px; height: 6px; background: rgba(255,255,255,0.1);
+        border-radius: 3px; overflow: hidden;
+      }
+      .yast-progress-fill {
+        height: 100%; background: linear-gradient(90deg, #7c5cff, #4ade80);
+        border-radius: 3px; transition: width 0.3s; width: 0%;
+      }
+      .yast-progress-text {
+        color: #888; font-size: 13px; margin-top: 15px;
+      }
+    </style>
+  </head>
+
+  <body>
+    <!-- 加载界面 -->
+    <div id="yast-loading">
+      <div class="yast-logo">MINIBLOX</div>
+      <div class="yast-progress-bar"><div class="yast-progress-fill"></div></div>
+      <div class="yast-progress-text">正在初始化...</div>
+    </div>
+
+    <!-- 游戏 -->
+    <div id="react" style="position: absolute; width: 100%; height: 100%; z-index: 4"></div>
+    <canvas id="canvas-hud"></canvas>
+    <div id="canvas-holder"></div>
+  </body>
+</html>
