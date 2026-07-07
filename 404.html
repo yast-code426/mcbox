@@ -2,16 +2,17 @@
 <html lang="zh-CN">
   <head>
 <script>
-// GitHub Pages 子目录路径自适应
-(function(){
-  var host = location.hostname;
+// 计算 base path (GitHub Pages 子目录自适应)
+// 不使用 <base> 标签,因为它会破坏 Service Worker 的相对路径
+window.__YAST_BASE = (function(){
   var path = location.pathname;
-  if (host.endsWith('.github.io')) {
-    var seg = path.split('/').filter(Boolean)[0];
-    if (seg) document.write('<base href="/' + seg + '/">');
-  } else {
-    document.write('<base href="/">');
+  // 如果是 /user/repo/xxx,提取 /user/repo/
+  // 如果是 /xxx,返回 /
+  var parts = path.split('/').filter(Boolean);
+  if (parts.length > 1 && location.hostname.endsWith('.github.io')) {
+    return '/' + parts[0] + '/';
   }
+  return '/';
 })();
 </script>
 <script>
@@ -24,29 +25,15 @@ try { if (!localStorage.getItem('Language')) localStorage.setItem('Language', 'z
     <title>Miniblox - 免费体素沙盒游戏 | Victor Wei, qhyun, Yast</title>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, user-scalable=no, maximum-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
-    <meta name="description" content="Play free with friends — no download, no sign-up, just click and play. A world of games like Minecraft, from Skywars to Survival." />
+    <meta name="description" content="Play free with friends — no download, no sign-up, just click and play." />
     <meta name="theme-color" content="#6045a0" />
     <meta name="author" content="Victor Wei, qhyun, Yast" />
-    <link rel="canonical" href="https://miniblox.io/" />
-    <meta name="mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta property="og:site_name" content="Miniblox" />
-    <meta property="og:title" content="Miniblox – Free Survival, Creative, Skywars &amp; More" />
-    <meta property="og:type" content="website" />
-    <meta property="og:url" content="https://miniblox.io/" />
-    <meta property="og:image" content="https://miniblox.io/images/titlescreen/default.png" />
-    <meta name="twitter:card" content="summary_large_image" />
-    <link rel="manifest" href="./manifest.json" />
-    <meta http-equiv="Cache-control" content="no-cache, no-store, must-revalidate" />
-    <meta http-equiv="expires" content="0" />
-    <meta http-equiv="Pragma" content="no-cache" />
     <link rel="icon" type="image/png" href="./favicon.png" />
 
-    <!-- Yast 加载器: 下载解压 bundle.bin → 加载游戏 -->
+    <!-- Yast 加载器 -->
     <script src="./loader.js"></script>
 
     <style>
-      /* 加载界面 */
       #yast-loading {
         position: fixed; top: 0; left: 0; width: 100%; height: 100%;
         background: #1a1a2e; z-index: 9999;
@@ -73,14 +60,12 @@ try { if (!localStorage.getItem('Language')) localStorage.setItem('Language', 'z
   </head>
 
   <body>
-    <!-- 加载界面 -->
     <div id="yast-loading">
       <div class="yast-logo">MINIBLOX</div>
       <div class="yast-progress-bar"><div class="yast-progress-fill"></div></div>
       <div class="yast-progress-text">正在初始化...</div>
     </div>
 
-    <!-- 游戏 -->
     <div id="react" style="position: absolute; width: 100%; height: 100%; z-index: 4"></div>
     <canvas id="canvas-hud"></canvas>
     <div id="canvas-holder"></div>
