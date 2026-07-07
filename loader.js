@@ -1,8 +1,7 @@
 /**
- * Yast Miniblox 加载器
- * 1. 注册 Service Worker (用绝对路径,不受 base 影响)
- * 2. 接收 SW 进度 / 等待解压完成
- * 3. 超时自动降级: 直接从网络加载游戏文件
+ * Yast Miniblox 加载器 v2
+ * 注册 SW → 等待解压完成 → 加载游戏
+ * 如果 SW 失败,显示错误提示让用户刷新
  */
 (function () {
   'use strict';
@@ -26,24 +25,35 @@
     }
   }
 
+  function showError(msg) {
+    if (progressText) {
+      progressText.innerHTML = '<span style="color:#f87171">' + msg + '</span><br><span style="color:#666;font-size:12px;margin-top:8px;display:block">请刷新页面重试,或检查浏览器控制台(F12)</span>';
+    }
+    if (progressFill) progressFill.style.background = '#f87171';
+  }
+
   function loadGame() {
     if (gameLoaded) return;
     gameLoaded = true;
     console.log('[Yast] 加载游戏脚本...');
 
-    var base = BASE;
     var patchScript = document.createElement('script');
-    patchScript.src = base + 'assets/yast-patch.js';
+    patchScript.src = BASE + 'assets/yast-patch.js';
+    patchScript.onerror = function () {
+      console.error('[Yast] yast-patch.js 加载失败 — SW 缓存可能未就绪');
+      gameLoaded = false;
+      showError('游戏资源未就绪,请刷新页面');
+    };
     document.head.appendChild(patchScript);
 
     var cssLink = document.createElement('link');
     cssLink.rel = 'stylesheet';
-    cssLink.href = base + 'assets/index-CT5yzSTW.css';
+    cssLink.href = BASE + 'assets/index-CT5yzSTW.css';
     document.head.appendChild(cssLink);
 
     var moduleScript = document.createElement('script');
     moduleScript.type = 'module';
-    moduleScript.src = base + 'assets/index-BSNENdmO.js';
+    moduleScript.src = BASE + 'assets/index-BSNENdmO.js';
     document.head.appendChild(moduleScript);
 
     setProgress(100, '加载完成!');
@@ -52,19 +62,16 @@
 
   setProgress(5, '正在初始化...');
 
-  // 不支持 SW → 直接加载
   if (!('serviceWorker' in navigator)) {
-    console.warn('[Yast] 不支持 Service Worker,直接加载');
-    loadGame();
+    showError('浏览器不支持 Service Worker,无法运行游戏');
     return;
   }
 
-  // 用绝对路径注册 SW,不受 <base> 影响
   var swUrl = BASE + 'sw.js';
   console.log('[Yast] 注册 SW:', swUrl);
 
   navigator.serviceWorker.register(swUrl, { scope: BASE }).then(function (reg) {
-    console.log('[Yast] SW 注册成功');
+    console.log('[Yast] SW 注册成功, state:', reg.installing ? 'installing' : reg.waiting ? 'waiting' : reg.active ? 'active' : 'unknown');
 
     // 监听 SW 消息
     navigator.serviceWorker.addEventListener('message', function (e) {
@@ -73,63 +80,54 @@
         setProgress(e.data.progress, e.data.text);
       }
       if (e.data.type === 'bundle-ready') {
-        console.log('[Yast] 资源已就绪');
+        console.log('[Yast] ✓ 资源就绪,加载游戏');
         loadGame();
       }
     });
 
     setProgress(10, '正在下载资源包...');
 
-    // 等待 SW 就绪,但加 15 秒超时
-    var swReady = navigator.serviceWorker.ready;
-    var timeout = setTimeout(function () {
-      console.warn('[Yast] SW 就绪超时(15s),降级直接加载');
-      loadGame();
-    }, 15000);
+    // 等待 SW 就绪
+    navigator.serviceWorker.ready.then(function () {
+      console.log('[Yast] SW ready, controller:', !!navigator.serviceWorker.controller);
 
-    swReady.then(function () {
-      clearTimeout(timeout);
-      console.log('[Yast] SW 已就绪,检查资源...');
-
-      // 询问 SW 是否已就绪
       if (navigator.serviceWorker.controller) {
         navigator.serviceWorker.controller.postMessage('check-ready');
       } else {
-        // controller 还没就绪,等一下再问
-        setTimeout(function () {
+        // controller 可能还没就绪,监听 controllerchange
+        navigator.serviceWorker.addEventListener('controllerchange', function () {
+          console.log('[Yast] controller 就绪');
           if (navigator.serviceWorker.controller) {
             navigator.serviceWorker.controller.postMessage('check-ready');
-          } else {
-            console.warn('[Yast] 无 controller,降级直接加载');
-            loadGame();
           }
-        }, 1000);
+        });
+        // 也设个超时
+        setTimeout(function () {
+          if (!gameLoaded && navigator.serviceWorker.controller) {
+            navigator.serviceWorker.controller.postMessage('check-ready');
+          } else if (!gameLoaded) {
+            // 刷新页面让 SW 接管
+            console.warn('[Yast] 无 controller,刷新页面');
+            location.reload();
+          }
+        }, 5000);
       }
-
-      // 再加 60 秒超时:如果 SW 一直没说 ready,直接加载
-      setTimeout(function () {
-        if (!gameLoaded) {
-          console.warn('[Yast] SW 解压超时(60s),降级直接加载');
-          loadGame();
-        }
-      }, 60000);
     }).catch(function (err) {
-      clearTimeout(timeout);
       console.error('[Yast] SW ready 失败:', err);
-      loadGame();
+      showError('Service Worker 启动失败,请刷新页面');
     });
 
   }).catch(function (err) {
     console.error('[Yast] SW 注册失败:', err);
-    loadGame();
+    showError('Service Worker 注册失败: ' + err.message);
   });
 
-  // 全局超时: 90 秒后无论如何都加载游戏
+  // 全局超时: 120 秒后显示错误
   setTimeout(function () {
     if (!gameLoaded) {
-      console.warn('[Yast] 全局超时(90s),强制加载');
-      loadGame();
+      console.error('[Yast] 全局超时(120s)');
+      showError('加载超时,请刷新页面重试');
     }
-  }, 90000);
+  }, 120000);
 
 })();

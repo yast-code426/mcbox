@@ -1,13 +1,12 @@
 /**
- * Yast Miniblox Service Worker
- * 下载分片 → 合并 → 解压 → 解密 → 缓存所有文件 → 拦截请求
- * 关键: 所有 fetch 使用 registration.scope 作为 base
+ * Yast Miniblox Service Worker v2
+ * 修复: 用 Response blob 解压代替流式 pipeThrough (避免卡住)
+ * 下载分片 → 合并 → 解压 → 解密 → 缓存 → 拦截请求
  */
-var CACHE_NAME = 'yast-miniblox-v1';
+var CACHE_NAME = 'yast-miniblox-v2';
 var XOR_KEY = 'YastMiniblox2026';
 var bundleReady = false;
 var pendingClients = [];
-var SW_SCOPE = ''; // 安装时设置
 
 var MIME_MAP = {
   '.js': 'application/javascript; charset=utf-8',
@@ -46,38 +45,33 @@ function notifyProgress(progress, text) {
   });
 }
 
-// 下载所有分片并合并
-async function downloadAndMergeChunks() {
-  var base = SW_SCOPE;
-  // 确保 base 以 / 结尾
-  if (!base.endsWith('/')) base += '/';
+async function installBundle() {
+  var scope = self.registration.scope;
+  if (!scope.endsWith('/')) scope += '/';
+  console.log('[Yast SW] scope:', scope);
 
   // 1. 读取分片信息
-  var infoUrl = base + 'bundle.json';
-  console.log('[Yast SW] 读取分片信息:', infoUrl);
-  var infoResp = await fetch(infoUrl, { cache: 'no-store' });
-  if (!infoResp.ok) throw new Error('bundle.json 下载失败: ' + infoResp.status);
+  notifyProgress(5, '读取分片信息...');
+  var infoResp = await fetch(scope + 'bundle.json', { cache: 'no-store' });
+  if (!infoResp.ok) throw new Error('bundle.json 失败: ' + infoResp.status);
   var info = await infoResp.json();
   var numChunks = info.chunks;
-  console.log('[Yast SW] 共 ' + numChunks + ' 个分片');
+  console.log('[Yast SW] 分片数:', numChunks);
 
-  // 2. 逐个下载分片
+  // 2. 下载所有分片
   var chunks = [];
   for (var i = 0; i < numChunks; i++) {
-    var chunkUrl = base + 'bundle.' + i + '.bin';
-    var pct = Math.round((i / numChunks) * 50);
-    notifyProgress(pct, '正在下载资源包 (' + (i + 1) + '/' + numChunks + ')...');
-    console.log('[Yast SW] 下载分片 ' + i + ':', chunkUrl);
-
-    var resp = await fetch(chunkUrl, { cache: 'no-store' });
+    var pct = 5 + Math.round((i / numChunks) * 45);
+    notifyProgress(pct, '下载资源包 (' + (i + 1) + '/' + numChunks + ')...');
+    var resp = await fetch(scope + 'bundle.' + i + '.bin', { cache: 'no-store' });
     if (!resp.ok) throw new Error('分片 ' + i + ' 失败: ' + resp.status);
     var buf = await resp.arrayBuffer();
     chunks.push(new Uint8Array(buf));
     console.log('[Yast SW] 分片 ' + i + ': ' + (buf.byteLength / 1048576).toFixed(1) + 'MB');
   }
 
-  // 3. 合并
-  notifyProgress(60, '正在合并资源包...');
+  // 3. 合并分片
+  notifyProgress(55, '合并资源包...');
   var totalLen = 0;
   for (var j = 0; j < chunks.length; j++) totalLen += chunks[j].length;
   var compressed = new Uint8Array(totalLen);
@@ -86,61 +80,70 @@ async function downloadAndMergeChunks() {
     compressed.set(chunks[k], offset);
     offset += chunks[k].length;
   }
+  chunks = null; // 释放内存
   console.log('[Yast SW] 合并完成: ' + (totalLen / 1048576).toFixed(1) + 'MB');
-  return compressed;
-}
 
-// 解压+解密+解析
-async function installBundle() {
-  SW_SCOPE = self.registration.scope;
-  console.log('[Yast SW] scope:', SW_SCOPE);
+  // 4. Gzip 解压 — 用 Response + DecompressionStream,但用 blob 方式
+  notifyProgress(60, '解压资源中...');
+  console.log('[Yast SW] 开始解压...');
 
-  var compressed = await downloadAndMergeChunks();
-
-  // Gzip 解压
-  notifyProgress(70, '正在解压资源...');
-  var ds = new DecompressionStream('gzip');
-  var stream = new Response(compressed).body.pipeThrough(ds);
-  var decompressed = await new Response(stream).arrayBuffer();
-  console.log('[Yast SW] 解压后: ' + (decompressed.byteLength / 1048576).toFixed(1) + 'MB');
-
-  // XOR 解密
-  var data = new Uint8Array(decompressed);
-  var keyBytes = new TextEncoder().encode(XOR_KEY);
-  for (var i = 0; i < data.length; i++) {
-    data[i] ^= keyBytes[i % keyBytes.length];
+  var decompressedData;
+  try {
+    // 方法1: DecompressionStream (现代浏览器)
+    var blob = new Blob([compressed]);
+    var ds = new DecompressionStream('gzip');
+    var decompressedStream = blob.stream().pipeThrough(ds);
+    var decompressedBlob = await new Response(decompressedStream).blob();
+    decompressedData = new Uint8Array(await decompressedBlob.arrayBuffer());
+    console.log('[Yast SW] 解压完成(DecompressionStream): ' + (decompressedData.length / 1048576).toFixed(1) + 'MB');
+  } catch (e1) {
+    console.warn('[Yast SW] DecompressionStream 失败:', e1.message, '尝试备用方案...');
+    // 方法2: 如果 DecompressionStream 不行,改用未压缩的 bundle
+    // 但我们没有未压缩的,所以这里只能报错
+    throw new Error('解压失败: ' + e1.message);
   }
 
-  // 解析二进制
+  compressed = null; // 释放内存
+
+  // 5. XOR 解密
+  notifyProgress(70, '解密资源...');
+  var keyBytes = new TextEncoder().encode(XOR_KEY);
+  for (var i2 = 0; i2 < decompressedData.length; i2++) {
+    decompressedData[i2] ^= keyBytes[i2 % keyBytes.length];
+  }
+
+  // 6. 解析二进制格式
+  notifyProgress(75, '解析文件列表...');
+  var data = decompressedData;
   var view = new DataView(data.buffer);
   var dec = new TextDecoder();
-  var offset = 0;
-  var magic = dec.decode(data.slice(0, 4));
-  if (magic !== 'YAST') throw new Error('bundle 格式错误: ' + magic);
-  offset = 4;
-  var numFiles = view.getUint32(offset, true);
-  offset += 4;
-  console.log('[Yast SW] 解析 ' + numFiles + ' 个文件...');
+  var pos = 0;
 
-  // 存入 Cache API
-  notifyProgress(75, '正在缓存游戏文件...');
+  var magic = dec.decode(data.slice(0, 4));
+  if (magic !== 'YAST') throw new Error('格式错误: ' + magic);
+  pos = 4;
+
+  var numFiles = view.getUint32(pos, true);
+  pos += 4;
+  console.log('[Yast SW] 文件数:', numFiles);
+
+  // 7. 存入 Cache API
+  notifyProgress(78, '缓存游戏文件...');
   var cache = await caches.open(CACHE_NAME);
-  var base = SW_SCOPE;
-  if (!base.endsWith('/')) base += '/';
 
   var count = 0;
   for (var fi = 0; fi < numFiles; fi++) {
-    var nameLen = view.getUint16(offset, true);
-    offset += 2;
-    var name = dec.decode(data.slice(offset, offset + nameLen));
-    offset += nameLen;
-    var contentLen = view.getUint32(offset, true);
-    offset += 4;
-    var content = data.slice(offset, offset + contentLen);
-    offset += contentLen;
+    var nameLen = view.getUint16(pos, true);
+    pos += 2;
+    var name = dec.decode(data.slice(pos, pos + nameLen));
+    pos += nameLen;
+    var contentLen = view.getUint32(pos, true);
+    pos += 4;
+    var content = data.slice(pos, pos + contentLen);
+    pos += contentLen;
 
     var relPath = name.replace(/^\//, '');
-    var fullUrl = base + relPath;
+    var fullUrl = scope + relPath;
     var mime = getMime(name);
 
     try {
@@ -149,21 +152,22 @@ async function installBundle() {
         new Response(content, { headers: { 'Content-Type': mime } })
       );
     } catch (e) {
-      console.warn('[Yast SW] 缓存失败:', relPath, e);
+      console.warn('[Yast SW] 缓存失败:', relPath);
     }
     count++;
-    if (count % 30 === 0) {
-      var pct = 75 + Math.round((count / numFiles) * 20);
-      notifyProgress(pct, '正在缓存 ' + count + '/' + numFiles);
+    if (count % 25 === 0) {
+      var pct2 = 78 + Math.round((count / numFiles) * 17);
+      notifyProgress(pct2, '缓存 ' + count + '/' + numFiles);
+      console.log('[Yast SW] 缓存进度: ' + count + '/' + numFiles);
     }
   }
 
-  // 缓存 index.html
+  // 8. 缓存 index.html
   try {
-    var indexResp = await fetch(base + 'index.html', { cache: 'no-store' });
+    var indexResp = await fetch(scope + 'index.html', { cache: 'no-store' });
     if (indexResp.ok) {
-      await cache.put(new Request(base), indexResp.clone());
-      await cache.put(new Request(base + 'index.html'), indexResp.clone());
+      await cache.put(new Request(scope), indexResp.clone());
+      await cache.put(new Request(scope + 'index.html'), indexResp.clone());
     }
   } catch (e) {}
 
@@ -179,17 +183,16 @@ async function installBundle() {
 
 // 安装
 self.addEventListener('install', function (event) {
-  console.log('[Yast SW] 安装中...');
+  console.log('[Yast SW v2] 安装中...');
   event.waitUntil(
     installBundle()
       .then(function () {
-        console.log('[Yast SW] 安装完成,跳过等待');
+        console.log('[Yast SW v2] 安装完成');
         return self.skipWaiting();
       })
       .catch(function (e) {
-        console.error('[Yast SW] 安装失败:', e);
+        console.error('[Yast SW v2] 安装失败:', e);
         notifyProgress(0, '加载失败: ' + e.message);
-        // 即使失败也 skipWaiting,让 loader.js 的超时降级生效
         return self.skipWaiting();
       })
   );
@@ -197,11 +200,12 @@ self.addEventListener('install', function (event) {
 
 // 激活
 self.addEventListener('activate', function (event) {
-  console.log('[Yast SW] 激活...');
+  console.log('[Yast SW v2] 激活...');
   event.waitUntil(
     caches.keys().then(function (names) {
       return Promise.all(names.map(function (name) {
         if (name !== CACHE_NAME) {
+          console.log('[Yast SW v2] 删旧缓存:', name);
           return caches.delete(name);
         }
       }));
@@ -216,7 +220,6 @@ self.addEventListener('fetch', function (event) {
   var url = new URL(event.request.url);
   if (url.origin !== self.location.origin) return;
 
-  // HTML 导航: 网络优先
   if (event.request.mode === 'navigate') {
     event.respondWith(
       fetch(event.request).then(function (resp) {
@@ -234,7 +237,6 @@ self.addEventListener('fetch', function (event) {
     return;
   }
 
-  // 其他: 缓存优先 (ignoreSearch 忽略 ?v=xxx)
   event.respondWith(
     caches.match(event.request, { ignoreSearch: true }).then(function (cached) {
       if (cached) return cached;
@@ -260,6 +262,8 @@ self.addEventListener('message', function (event) {
       event.source.postMessage({ type: 'bundle-ready' });
     } else {
       pendingClients.push(event.source);
+      // 立即发一条当前状态
+      event.source.postMessage({ type: 'progress', progress: 0, text: '正在处理资源...' });
     }
   } else if (event.data === 'skipWaiting') {
     self.skipWaiting();
